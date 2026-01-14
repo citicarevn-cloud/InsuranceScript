@@ -30,7 +30,7 @@ if 'video_settings' not in st.session_state: st.session_state.video_settings = {
 
 # --- CẤU HÌNH VOICE ID ---
 VOICE_MAP = {
-    "Chuyên nghiệp": "mJLZ5p8I7Pk81BHpKwbx",  # Nam Sadoma
+    "Chuyên nghiệp": "1l0C0QA9c9jN22EmWiB0",  # Nam Sadoma
     "Đời thường": "foH7s9fX31wFFH2yqrFa",     # Huyen
     "Cảm động": "1l0C0QA9c9jN22EmWiB0",       # Jade
     "Hài hước": "JxmKvRaNYFidf0N27Vng"        # Son Tran
