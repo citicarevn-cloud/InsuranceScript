@@ -28,13 +28,12 @@ st.markdown("""
 if 'feedback_history' not in st.session_state: st.session_state.feedback_history = []
 if 'video_settings' not in st.session_state: st.session_state.video_settings = {'w': 1280, 'h': 720}
 
-# --- CẤU HÌNH GIỌNG ĐỌC ELEVENLABS (ĐÃ CHỌN LỌC) ---
-# Bạn có thể thay đổi Voice ID tại đây nếu tìm được giọng ưng ý hơn trên thư viện
+# --- CẤU HÌNH VOICE ID (CỐ ĐỊNH - GIỮ NGUYÊN) ---
 VOICE_MAP = {
-    "Chuyên nghiệp": "mJLZ5p8I7Pk81BHpKwbx",  # Giọng Nam Sadoma: Ấm, tin cậy, chuẩn bảo hiểm
-    "Đời thường": "foH7s9fX31wFFH2yqrFa",     # Giọng Huyen: Nhẹ nhàng, thân thiện, tự nhiên
-    "Cảm động": "1l0C0QA9c9jN22EmWiB0",       # Giọng Jade: Kể chuyện (Storyteller), sâu lắng
-    "Hài hước": "JxmKvRaNYFidf0N27Vng"        # Giọng Son Tran: Trẻ trung, năng động
+    "Chuyên nghiệp": "mJLZ5p8I7Pk81BHpKwbx",  # Nam Sadoma
+    "Đời thường": "foH7s9fX31wFFH2yqrFa",     # Huyen
+    "Cảm động": "1l0C0QA9c9jN22EmWiB0",       # Jade
+    "Hài hước": "JxmKvRaNYFidf0N27Vng"        # Son Tran
 }
 
 # --- SIDEBAR ---
@@ -47,11 +46,10 @@ with st.sidebar:
         st.session_state.feedback_history = saved
         st.rerun()
 
-    # TỰ ĐỘNG LẤY API KEY TỪ SECRETS (KHÔNG CẦN NHẬP TAY)
+    # 1. API KEY (GIỮ NGUYÊN)
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     eleven_api = st.secrets.get("ELEVEN_API_KEY", "")
 
-    # Hiển thị trạng thái kết nối
     if api_key:
         st.success(f"✅ Gemini API: Đã kết nối")
     else:
@@ -64,11 +62,29 @@ with st.sidebar:
 
     st.divider()
     
-    # CẤU HÌNH GIỌNG ĐỌC
+    # 2. CHỌN MODEL (ĐÃ KHÔI PHỤC TÍNH NĂNG QUÉT)
+    st.subheader("🧠 Bộ não xử lý")
+    
+    # Logic quét model tự động
+    available_models = ["models/gemini-pro"] # Mặc định an toàn
+    if api_key:
+        try:
+            genai.configure(api_key=api_key)
+            # Lấy danh sách thực tế từ Project của bạn
+            models = genai.list_models()
+            available_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+        except Exception as e:
+            st.error(f"Không quét được model: {e}")
+            
+    # Cho phép người dùng chọn từ danh sách đã quét
+    selected_model = st.selectbox("Chọn Model:", available_models, index=0)
+
+    st.divider()
+
+    # 3. CẤU HÌNH GIỌNG ĐỌC (GIỮ NGUYÊN)
     st.subheader("🔊 Nguồn giọng đọc")
     tts_provider = st.selectbox("Chọn Server:", ["ElevenLabs (VIP - Nên dùng)", "Microsoft (Miễn phí)", "Google (Cơ bản)"])
     
-    # Biến lưu giọng Microsoft
     edge_voice = "vi-VN-HoaiMyNeural" 
     if "Microsoft" in tts_provider:
         edge_voice = st.selectbox("Chọn giọng MS:", [
@@ -76,13 +92,10 @@ with st.sidebar:
             "vi-VN-NamMinhNeural (Nam - Trầm ấm)"
         ]).split(" ")[0]
 
-    # Model Gemini
-    selected_model = "models/gemini-1.5-flash"
-
-# --- HÀM XỬ LÝ TEXT & AUDIO ---
+# --- HÀM XỬ LÝ (GIỮ NGUYÊN CÁC CHỨC NĂNG TỐT) ---
 
 def clean_text_for_audio(text):
-    """Làm sạch văn bản để đọc không bị vấp"""
+    """Làm sạch văn bản"""
     text = re.sub(r'\[.*?\]', '', text)
     text = re.sub(r'\(.*?\)', '', text)
     prefixes = ["Lời bình:", "Audio:", "Voice:", "Thuyết minh:", "Host:", "MC:", "Scene \d+:"]
@@ -96,18 +109,14 @@ async def generate_edge_tts(text, voice, filename):
     await communicate.save(filename)
 
 def generate_audio_unified(text, filename, tone_key="Chuyên nghiệp"):
-    """Tự động chọn giọng theo Tone"""
     clean_text = clean_text_for_audio(text)
     if not clean_text: return False
     
-    # 1. ELEVENLABS (Ưu tiên số 1)
+    # ElevenLabs
     if "ElevenLabs" in tts_provider and eleven_api:
-        # Tự động lấy ID giọng dựa trên Tone người dùng chọn
         voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx") 
-        
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
-        # model_id='eleven_multilingual_v2' hỗ trợ tiếng Việt tốt nhất
         data = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
         try:
             response = requests.post(url, json=data, headers=headers)
@@ -116,23 +125,22 @@ def generate_audio_unified(text, filename, tone_key="Chuyên nghiệp"):
                 return True
         except: pass 
         
-    # 2. MICROSOFT EDGE TTS
+    # Microsoft Edge TTS
     if "Microsoft" in tts_provider:
         try:
             asyncio.run(generate_edge_tts(clean_text, edge_voice, filename))
             return True
         except: pass
 
-    # 3. GOOGLE TTS
+    # Google TTS
     try:
         tts = gTTS(text=clean_text, lang='vi')
         tts.save(filename)
         return True
     except: return False
 
-# --- HÀM XỬ LÝ ẢNH & VIDEO ---
-
 def get_image_url(prompt, width=1280, height=720):
+    # Giữ nguyên delay và random seed để tránh rate limit
     time.sleep(random.uniform(1.0, 3.0)) 
     seed = random.randint(1, 10000000)
     ratio_prompt = ", vertical, tall, 9:16" if width < height else ", wide angle, cinematic, 16:9"
@@ -153,7 +161,6 @@ def process_scene(args):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                 audio_path = f.name
             
-            # Truyền Tone vào để chọn giọng đúng
             success = generate_audio_unified(raw_voice_text, audio_path, tone)
             if not success: return None
 
@@ -176,9 +183,9 @@ def create_video_from_script(script_data, width, height, tone):
     status_text = st.empty()
     status_text.text(f"🚀 Đang tải tài nguyên (Tone: {tone})...")
     
-    # Truyền thêm tham số Tone vào
     process_args = [(line, width, height, tone) for line in lines]
     
+    # Đa luồng (Max 2 workers để an toàn ảnh)
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(process_scene, process_args))
         
@@ -228,7 +235,6 @@ with col1:
     sector = st.selectbox("Lĩnh vực", ["Bảo hiểm Nhân thọ", "Bảo hiểm Phi Nhân thọ", "Bảo hiểm Sức khoẻ"])
     content_type = st.radio("Loại nội dung", ["Clip (Video)", "Bài Website", "Bài Facebook"])
     
-    # CÁC BIẾN MẶC ĐỊNH
     seo_guide = ""
     video_w, video_h = 1280, 720
     
@@ -253,7 +259,6 @@ with col1:
     else:
         seo_guide = "- Viết Caption Facebook thu hút. Đề xuất ảnh vuông."
 
-    # LỰA CHỌN TONE GIỌNG (SẼ TỰ ĐỘNG MAP VỚI VOICE ID)
     tone_options = ["Chuyên nghiệp", "Đời thường", "Cảm động", "Hài hước"]
     tone = st.select_slider("Tone giọng & Phong cách", tone_options)
     
@@ -265,15 +270,16 @@ with col2:
     if btn_run:
         if not api_key: st.error("Chưa kết nối Gemini API")
         else:
-            with st.spinner(f"AI đang viết kịch bản..."):
+            with st.spinner(f"AI đang quét model và xử lý..."):
                 try:
+                    # Lưu cài đặt video
                     st.session_state.video_settings = {'w': video_w, 'h': video_h}
-                    st.session_state.tone_key = tone # Lưu tone để dùng khi render
+                    st.session_state.tone_key = tone
                     
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(selected_model)
-                    past_fb = "\n".join([f"- {fb}" for fb in st.session_state.feedback_history])
+                    model = genai.GenerativeModel(selected_model) # Sử dụng Model từ danh sách quét
                     
+                    past_fb = "\n".join([f"- {fb}" for fb in st.session_state.feedback_history])
                     prompt = f"""
                     Chủ đề: {keyword}. Lĩnh vực: {sector}. Tone: {tone}.
                     YÊU CẦU ĐẦU RA:
@@ -288,7 +294,7 @@ with col2:
                     st.session_state.type = content_type
                     st.session_state.kw = keyword
                     st.success("Đã có nội dung!")
-                except Exception as e: st.error(f"Lỗi: {e}")
+                except Exception as e: st.error(f"Lỗi: {e}. Hãy thử chọn Model khác ở Sidebar.")
 
     if 'result' in st.session_state:
         if st.session_state.type == "Bài Website":
