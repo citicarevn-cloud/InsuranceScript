@@ -7,3 +7,4 @@ imageio-ffmpeg
 decorator>=4.0.0
 numpy
 requests
+edge-tts
