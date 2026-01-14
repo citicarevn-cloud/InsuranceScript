@@ -28,7 +28,7 @@ st.markdown("""
 if 'feedback_history' not in st.session_state: st.session_state.feedback_history = []
 if 'video_settings' not in st.session_state: st.session_state.video_settings = {'w': 1280, 'h': 720}
 
-# --- CẤU HÌNH VOICE ID (CỐ ĐỊNH - GIỮ NGUYÊN) ---
+# --- CẤU HÌNH VOICE ID ---
 VOICE_MAP = {
     "Chuyên nghiệp": "mJLZ5p8I7Pk81BHpKwbx",  # Nam Sadoma
     "Đời thường": "foH7s9fX31wFFH2yqrFa",     # Huyen
@@ -46,42 +46,34 @@ with st.sidebar:
         st.session_state.feedback_history = saved
         st.rerun()
 
-    # 1. API KEY (GIỮ NGUYÊN)
+    # 1. API KEY
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     eleven_api = st.secrets.get("ELEVEN_API_KEY", "")
 
-    if api_key:
-        st.success(f"✅ Gemini API: Đã kết nối")
-    else:
-        api_key = st.text_input("Gemini API Key", type="password")
+    if api_key: st.success(f"✅ Gemini API: Đã kết nối")
+    else: api_key = st.text_input("Gemini API Key", type="password")
         
-    if eleven_api:
-        st.success(f"✅ ElevenLabs API: Đã kết nối")
-    else:
-        eleven_api = st.text_input("ElevenLabs API Key", type="password")
+    if eleven_api: st.success(f"✅ ElevenLabs API: Đã kết nối")
+    else: eleven_api = st.text_input("ElevenLabs API Key", type="password")
 
     st.divider()
     
-    # 2. CHỌN MODEL (ĐÃ KHÔI PHỤC TÍNH NĂNG QUÉT)
+    # 2. TỰ ĐỘNG QUÉT MODEL (GIỮ NGUYÊN TÍNH NĂNG BẠN THÍCH)
     st.subheader("🧠 Bộ não xử lý")
-    
-    # Logic quét model tự động
-    available_models = ["models/gemini-pro"] # Mặc định an toàn
+    available_models = ["models/gemini-pro"]
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            # Lấy danh sách thực tế từ Project của bạn
             models = genai.list_models()
             available_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         except Exception as e:
-            st.error(f"Không quét được model: {e}")
+            st.error(f"Lỗi quét model: {e}")
             
-    # Cho phép người dùng chọn từ danh sách đã quét
     selected_model = st.selectbox("Chọn Model:", available_models, index=0)
 
     st.divider()
 
-    # 3. CẤU HÌNH GIỌNG ĐỌC (GIỮ NGUYÊN)
+    # 3. CẤU HÌNH GIỌNG ĐỌC
     st.subheader("🔊 Nguồn giọng đọc")
     tts_provider = st.selectbox("Chọn Server:", ["ElevenLabs (VIP - Nên dùng)", "Microsoft (Miễn phí)", "Google (Cơ bản)"])
     
@@ -92,10 +84,9 @@ with st.sidebar:
             "vi-VN-NamMinhNeural (Nam - Trầm ấm)"
         ]).split(" ")[0]
 
-# --- HÀM XỬ LÝ (GIỮ NGUYÊN CÁC CHỨC NĂNG TỐT) ---
+# --- HÀM XỬ LÝ ---
 
 def clean_text_for_audio(text):
-    """Làm sạch văn bản"""
     text = re.sub(r'\[.*?\]', '', text)
     text = re.sub(r'\(.*?\)', '', text)
     prefixes = ["Lời bình:", "Audio:", "Voice:", "Thuyết minh:", "Host:", "MC:", "Scene \d+:"]
@@ -112,27 +103,35 @@ def generate_audio_unified(text, filename, tone_key="Chuyên nghiệp"):
     clean_text = clean_text_for_audio(text)
     if not clean_text: return False
     
-    # ElevenLabs
-    if "ElevenLabs" in tts_provider and eleven_api:
-        voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx") 
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
-        data = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
-        try:
-            response = requests.post(url, json=data, headers=headers)
-            if response.status_code == 200:
-                with open(filename, 'wb') as f: f.write(response.content)
-                return True
-        except: pass 
+    # 1. ELEVENLABS (CÓ BÁO LỖI)
+    if "ElevenLabs" in tts_provider:
+        if not eleven_api:
+            st.warning("⚠️ Chưa nhập ElevenLabs API Key! Đang chuyển sang Google TTS.")
+        else:
+            voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx") 
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
+            data = {"text": clean_text, "model_id": "eleven_multilingual_v2"}
+            try:
+                response = requests.post(url, json=data, headers=headers)
+                if response.status_code == 200:
+                    with open(filename, 'wb') as f: f.write(response.content)
+                    return True
+                else:
+                    # HIỂN THỊ LỖI CHI TIẾT ĐỂ DEBUG
+                    st.error(f"❌ Lỗi ElevenLabs: {response.status_code} - {response.text}")
+                    st.toast("ElevenLabs lỗi -> Đang dùng giọng dự phòng...")
+            except Exception as e: 
+                st.error(f"Lỗi kết nối ElevenLabs: {e}")
         
-    # Microsoft Edge TTS
+    # 2. MICROSOFT EDGE TTS
     if "Microsoft" in tts_provider:
         try:
             asyncio.run(generate_edge_tts(clean_text, edge_voice, filename))
             return True
         except: pass
 
-    # Google TTS
+    # 3. GOOGLE TTS (Fallback cuối cùng)
     try:
         tts = gTTS(text=clean_text, lang='vi')
         tts.save(filename)
@@ -140,8 +139,8 @@ def generate_audio_unified(text, filename, tone_key="Chuyên nghiệp"):
     except: return False
 
 def get_image_url(prompt, width=1280, height=720):
-    # Giữ nguyên delay và random seed để tránh rate limit
-    time.sleep(random.uniform(1.0, 3.0)) 
+    # Tăng thời gian nghỉ để tránh Rate Limit
+    time.sleep(random.uniform(2.0, 4.0)) 
     seed = random.randint(1, 10000000)
     ratio_prompt = ", vertical, tall, 9:16" if width < height else ", wide angle, cinematic, 16:9"
     style = ", high quality illustration, isometric style, flat design, cinematic lighting, no text"
@@ -161,11 +160,15 @@ def process_scene(args):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                 audio_path = f.name
             
+            # Tạo Audio
             success = generate_audio_unified(raw_voice_text, audio_path, tone)
             if not success: return None
 
+            # Tải ảnh (Thêm User-Agent để giả lập trình duyệt - Tránh bị chặn)
             img_url = get_image_url(img_prompt, width, height)
-            response = requests.get(img_url, timeout=20)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(img_url, headers=headers, timeout=30)
+            
             if response.status_code == 200:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
                     f.write(response.content); img_path = f.name
@@ -181,17 +184,22 @@ def create_video_from_script(script_data, width, height, tone):
 
     progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.text(f"🚀 Đang tải tài nguyên (Tone: {tone})...")
+    status_text.text(f"🚀 Đang xử lý tài nguyên (Chế độ An toàn - Chậm nhưng Chắc)...")
     
     process_args = [(line, width, height, tone) for line in lines]
     
-    # Đa luồng (Max 2 workers để an toàn ảnh)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        results = list(executor.map(process_scene, process_args))
+    # QUAN TRỌNG: CHUYỂN VỀ 1 LUỒNG (TUẦN TỰ) ĐỂ TRÁNH RATE LIMIT 100%
+    # max_workers=1 nghĩa là làm xong ảnh 1 mới làm ảnh 2 -> Không bao giờ bị chặn.
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        for i, result in enumerate(executor.map(process_scene, process_args)):
+            results.append(result)
+            # Cập nhật tiến trình ngay khi xong từng cái
+            progress_bar.progress(int((i + 1) / total_scenes * 100))
         
     status_text.text("🎬 Đang render video...")
     clips = []
-    for i, asset in enumerate(results):
+    for asset in results:
         if asset:
             audio_path, img_path = asset
             try:
@@ -199,7 +207,6 @@ def create_video_from_script(script_data, width, height, tone):
                 clip = ImageClip(img_path).set_duration(ac.duration + 0.5).set_audio(ac).set_fps(15)
                 clips.append(clip)
             except: pass
-        progress_bar.progress(int((i + 1) / total_scenes * 100))
 
     if clips:
         try:
@@ -272,12 +279,11 @@ with col2:
         else:
             with st.spinner(f"AI đang quét model và xử lý..."):
                 try:
-                    # Lưu cài đặt video
                     st.session_state.video_settings = {'w': video_w, 'h': video_h}
                     st.session_state.tone_key = tone
                     
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(selected_model) # Sử dụng Model từ danh sách quét
+                    model = genai.GenerativeModel(selected_model) 
                     
                     past_fb = "\n".join([f"- {fb}" for fb in st.session_state.feedback_history])
                     prompt = f"""
@@ -294,7 +300,7 @@ with col2:
                     st.session_state.type = content_type
                     st.session_state.kw = keyword
                     st.success("Đã có nội dung!")
-                except Exception as e: st.error(f"Lỗi: {e}. Hãy thử chọn Model khác ở Sidebar.")
+                except Exception as e: st.error(f"Lỗi: {e}")
 
     if 'result' in st.session_state:
         if st.session_state.type == "Bài Website":
@@ -310,15 +316,14 @@ with col2:
                 vh = st.session_state.video_settings['h']
                 tk = st.session_state.get('tone_key', "Chuyên nghiệp")
                 
-                # Hiển thị thông tin giọng đang dùng
                 voice_name_map = {"mJLZ5p8I7Pk81BHpKwbx": "Nam Sadoma", "foH7s9fX31wFFH2yqrFa": "Huyền", "1l0C0QA9c9jN22EmWiB0": "Jade", "JxmKvRaNYFidf0N27Vng": "Sơn Trần"}
                 current_id = VOICE_MAP.get(tk, "")
                 v_label = voice_name_map.get(current_id, "Mặc định")
                 
                 if "ElevenLabs" in tts_provider:
-                    st.info(f"🎙️ Đang dùng giọng: **{v_label}** (Tone: {tk})")
+                    st.info(f"🎙️ ElevenLabs: **{v_label}**")
                 
-                if st.button("🎥 Dựng Video"):
+                if st.button("🎥 Dựng Video (Chế độ An toàn)"):
                     v_path = create_video_from_script(st.session_state.result, vw, vh, tk)
                     if v_path: st.video(v_path)
             with tab2:
