@@ -4,133 +4,164 @@ from gtts import gTTS
 import tempfile
 import os
 import requests
-# --- SỬA LỖI QUAN TRỌNG TẠI ĐÂY ---
-# Đã xóa ConcatenateAudioClip và thay bằng concatenate_videoclips chuẩn
+# Sửa lỗi import cho video
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
-# --- CẤU HÌNH ---
-st.set_page_config(page_title="AI Bảo Hiểm - Video Generator", layout="wide", page_icon="🎬")
+# --- CẤU HÌNH TRANG ---
+st.set_page_config(page_title="DAT Media AI Workflow", layout="wide", page_icon="🛡️")
 
-# --- HÀM HỖ TRỢ: TÌM ẢNH MIỄN PHÍ ---
-def get_image_url(keyword):
-    clean_keyword = keyword.replace(" ", "%20")
-    # Dùng Pollinations AI để vẽ ảnh (Miễn phí, không cần key)
-    return f"https://image.pollinations.ai/prompt/{clean_keyword}?width=1280&height=720&nologo=true"
+# --- CSS TÙY CHỈNH ---
+st.markdown("""
+    <style>
+    .stButton>button {background-color: #FF4B4B; color: white; font-weight: bold;}
+    </style>
+""", unsafe_allow_html=True)
 
-# --- HÀM HỖ TRỢ: TẠO VIDEO ---
-def create_video_segment(text, image_prompt):
-    # 1. Tạo Audio từ Text
-    tts = gTTS(text=text, lang='vi')
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
-        tts.save(audio_file.name)
-        audio_path = audio_file.name
-
-    # 2. Tải ảnh về
-    img_url = get_image_url(image_prompt)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as img_file:
-        img_data = requests.get(img_url).content
-        img_file.write(img_data)
-        img_path = img_file.name
-
-    # 3. Dựng Clip bằng MoviePy
-    audio_clip = AudioFileClip(audio_path)
-    # Ảnh hiện lâu bằng độ dài audio + 0.5s nghỉ
-    clip_duration = audio_clip.duration + 0.5
-    
-    video_clip = ImageClip(img_path).set_duration(clip_duration)
-    video_clip = video_clip.set_audio(audio_clip)
-    video_clip = video_clip.set_fps(24)
-    
-    return video_clip
-
-# --- GIAO DIỆN CHÍNH ---
+# --- 1. SIDEBAR: CẤU HÌNH ---
 with st.sidebar:
-    st.title("⚙️ Cấu hình")
-    # Tự động lấy Key từ Secrets
+    st.title("⚙️ Cấu hình hệ thống")
+    
+    # Kết nối API
     if "GEMINI_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
         st.success("✅ Đã kết nối API")
     else:
-        api = st.text_input("Nhập API Key thủ công")
-        if api: genai.configure(api_key=api)
+        api_key = st.text_input("Nhập API Key", type="password")
+        if api_key: genai.configure(api_key=api_key)
 
-st.title("🎬 AI Tạo Video Demo Bảo Hiểm")
-st.caption("Dành cho DAT Media: Tạo bản nháp video nhanh chóng từ kịch bản.")
+    st.divider()
+    st.markdown("### 🧠 Chọn bộ não AI")
+    # Cho phép đổi model để tránh lỗi 404 nếu Flash chưa cập nhật kịp
+    model_option = st.selectbox("Model", ["gemini-1.5-flash", "gemini-pro"], 
+                                help="Nếu Flash lỗi, hãy chuyển sang Pro")
+
+# --- 2. HÀM XỬ LÝ (BACKEND) ---
+
+def get_image_url(keyword):
+    """Tìm ảnh minh họa miễn phí từ Pollinations"""
+    clean_keyword = keyword.replace(" ", "%20")
+    return f"https://image.pollinations.ai/prompt/{clean_keyword}?width=1280&height=720&nologo=true"
+
+def create_video_from_script(script_data):
+    """Hàm dựng video từ kịch bản AI"""
+    clips = []
+    try:
+        lines = script_data.strip().split('\n')
+        for line in lines:
+            if "|" in line:
+                parts = line.split("|")
+                img_prompt = parts[0].replace("Scene", "").replace(":", "").strip()
+                voice_text = parts[1].strip()
+                
+                # 1. Tạo Audio
+                tts = gTTS(text=voice_text, lang='vi')
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
+                    tts.save(audio_file.name)
+                    audio_path = audio_file.name
+                
+                # 2. Tải ảnh
+                img_url = get_image_url(img_prompt)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as img_file:
+                    img_file.write(requests.get(img_url).content)
+                    img_path = img_file.name
+                
+                # 3. Ghép thành Clip con
+                audio_clip = AudioFileClip(audio_path)
+                clip = ImageClip(img_path).set_duration(audio_clip.duration + 0.5)
+                clip = clip.set_audio(audio_clip)
+                clip = clip.set_fps(24)
+                clips.append(clip)
+        
+        # 4. Nối các Clip con lại
+        if clips:
+            final_video = concatenate_videoclips(clips, method="compose")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
+                final_video.write_videofile(temp_video.name, codec='libx264', audio_codec='aac', fps=24, preset='ultrafast')
+                return temp_video.name
+    except Exception as e:
+        st.error(f"Lỗi dựng phim: {str(e)}")
+        return None
+
+# --- 3. GIAO DIỆN CHÍNH (FRONTEND) ---
+st.title("🛡️ AI Content Generator: Bảo Hiểm & Tài Chính")
 
 col1, col2 = st.columns([1, 1.5])
 
 with col1:
-    topic = st.text_input("Chủ đề video", "Bảo hiểm thai sản trọn gói")
+    st.subheader("1. Đầu vào nội dung")
+    keyword = st.text_input("Từ khóa / Chủ đề", "Bảo hiểm thai sản trọn gói")
+    sector = st.selectbox("Lĩnh vực", ["Bảo hiểm Nhân thọ", "Bảo hiểm Phi nhân thọ", "Chăm sóc sức khỏe"])
     
-    if st.button("🎥 LÊN KỊCH BẢN & DỰNG VIDEO"):
-        st.session_state.processing = True
+    # --- KHÔI PHỤC CÁC TÙY CHỌN CŨ ---
+    content_type = st.radio("Định dạng đầu ra", ["Clip (Video)", "Bài Website", "Bài Facebook"])
+    
+    tone_dict = {
+        "Chuyên nghiệp": "Tin cậy, số liệu rõ ràng, nghiêm túc.",
+        "Đời thường": "Gần gũi, dùng từ ngữ dân dã, thân thiện.",
+        "Hài hước": "Vui vẻ, bắt trend, dùng emoji.",
+        "Kể chuyện (Storytelling)": "Dẫn dắt bằng câu chuyện cảm động hoặc tình huống thực tế."
+    }
+    tone_key = st.selectbox("Tone giọng & Phong cách", list(tone_dict.keys()))
+    
+    # Tùy biến theo định dạng
+    extra_prompt = ""
+    if content_type == "Clip (Video)":
+        st.info("AI sẽ: Viết kịch bản -> Vẽ ảnh -> Đọc Voice -> Dựng Video")
+        duration = st.slider("Thời lượng video (giây)", 30, 90, 45)
+        extra_prompt = f"Viết kịch bản Video ngắn {duration} giây. BẮT BUỘC trả về định dạng: 'Scene [số]: [Mô tả ảnh tiếng Anh] | [Lời bình tiếng Việt]'"
+    elif content_type == "Bài Website":
+        words = st.number_input("Số từ", 500, 2000, 800)
+        extra_prompt = f"Viết bài chuẩn SEO website {words} từ. Có các thẻ H1, H2, H3. Đề xuất vị trí chèn ảnh."
+    else: # Facebook
+        extra_prompt = "Viết bài Facebook ngắn gọn, viral, nhiều emoji, tập trung tương tác."
 
-# --- XỬ LÝ LOGIC ---
-if st.session_state.get('processing'):
-    with col2:
-        # BƯỚC 1: VIẾT KỊCH BẢN
-        with st.status("1. AI đang viết kịch bản...", expanded=True) as status:
+    btn_process = st.button("🚀 BẮT ĐẦU XỬ LÝ")
+
+# --- 4. XỬ LÝ KẾT QUẢ ---
+with col2:
+    st.subheader("2. Kết quả")
+    
+    if btn_process:
+        with st.spinner("AI đang làm việc... vui lòng đợi..."):
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                prompt = f"""
-                Viết kịch bản video ngắn về: {topic}.
-                Chia làm đúng 3 phân cảnh (Scene).
-                Trả về định dạng thuần (Bắt buộc):
-                Scene 1: [Mô tả hình ảnh tiếng Anh ngắn gọn để AI vẽ] | [Lời bình tiếng Việt]
-                Scene 2: [Mô tả hình ảnh tiếng Anh ngắn gọn để AI vẽ] | [Lời bình tiếng Việt]
-                Scene 3: [Mô tả hình ảnh tiếng Anh ngắn gọn để AI vẽ] | [Lời bình tiếng Việt]
-                Không thêm lời chào hay ký tự thừa.
+                # Gọi Gemini
+                model = genai.GenerativeModel(model_option)
+                full_prompt = f"""
+                Vai trò: Chuyên gia Content Marketing ngành {sector}.
+                Chủ đề: {keyword}
+                Tone giọng: {tone_key} ({tone_dict[tone_key]})
+                Yêu cầu: {extra_prompt}
+                
+                Lưu ý: Nếu là Video, hãy tuân thủ tuyệt đối định dạng 'Scene X: [Visual] | [Audio]' để máy có thể đọc được.
                 """
-                response = model.generate_content(prompt)
-                script_content = response.text
-                st.code(script_content, language="text")
-                status.update(label="✅ Đã xong kịch bản!", state="complete", expanded=False)
-            except Exception as e:
-                st.error(f"Lỗi kịch bản: {e}")
-                st.stop()
-
-        # BƯỚC 2: DỰNG VIDEO
-        with st.status("2. Đang vẽ ảnh & Dựng video (Khoảng 1-2 phút)...", expanded=True) as status:
-            try:
-                lines = script_content.strip().split('\n')
-                clips = []
                 
-                for line in lines:
-                    if "|" in line:
-                        parts = line.split("|")
-                        img_prompt = parts[0].replace("Scene", "").replace(":", "").strip()
-                        voice_text = parts[1].strip()
-                        
-                        st.write(f"🎨 Đang vẽ: {img_prompt}")
-                        clip = create_video_segment(voice_text, img_prompt)
-                        clips.append(clip)
+                response = model.generate_content(full_prompt)
+                st.session_state.result_text = response.text
+                st.session_state.content_type = content_type # Lưu loại để xử lý tiếp
+                st.success("Đã có nội dung!")
                 
-                if clips:
-                    # Nối các đoạn lại thành 1 video
-                    final_video = concatenate_videoclips(clips, method="compose")
-                    
-                    # Xuất file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video:
-                        final_video.write_videofile(temp_video.name, codec='libx264', audio_codec='aac', fps=24, preset='ultrafast')
-                        st.session_state.video_path = temp_video.name
-                    
-                    status.update(label="✅ Đã dựng xong Video!", state="complete")
-                else:
-                    st.warning("AI trả về kịch bản không đúng định dạng. Hãy thử lại.")
-                    
             except Exception as e:
-                st.error(f"Lỗi dựng phim: {str(e)}")
+                st.error(f"Lỗi kết nối AI: {e}. Hãy thử đổi Model ở thanh bên trái.")
 
-# --- HIỂN THỊ KẾT QUẢ ---
-if st.session_state.get('video_path'):
-    with col2:
-        st.success("🎉 XONG! VIDEO CỦA BẠN ĐÂY:")
-        st.video(st.session_state.video_path)
+    # Hiển thị kết quả
+    if 'result_text' in st.session_state:
+        # Nếu là Video -> Tự động dựng phim
+        if st.session_state.content_type == "Clip (Video)":
+            tab1, tab2 = st.tabs(["🎬 Video Demo", "📝 Kịch bản gốc"])
+            
+            with tab1:
+                if st.button("🎥 Bấm vào đây để Dựng Video từ Kịch bản trên"):
+                    with st.spinner("Đang vẽ ảnh và ghép giọng đọc (khoảng 1 phút)..."):
+                        video_path = create_video_from_script(st.session_state.result_text)
+                        if video_path:
+                            st.video(video_path)
+                            with open(video_path, "rb") as v_file:
+                                st.download_button("⬇️ Tải Video về máy", v_file, "video_demo.mp4")
+            
+            with tab2:
+                st.text_area("Kịch bản thô", st.session_state.result_text, height=300)
         
-        with open(st.session_state.video_path, "rb") as file:
-            st.download_button(
-                label="⬇️ Tải Video Về Máy",
-                data=file,
-                file_name="demo_baohiem.mp4",
-                mime="video/mp4"
-            )
+        # Nếu là Bài viết -> Hiển thị text
+        else:
+            st.markdown(st.session_state.result_text)
+            st.button("Copy nội dung")
