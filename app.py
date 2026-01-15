@@ -15,7 +15,7 @@ from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, Col
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="DAT Media AI Studio", layout="wide", page_icon="🎙️")
 
-# --- CSS TÙY CHỈNH ---
+# --- CSS ---
 st.markdown("""
     <style>
     .stButton>button {background-color: #0068C9; color: white; font-weight: bold; border-radius: 8px; height: 3em; width: 100%;}
@@ -41,21 +41,19 @@ with st.sidebar:
     st.header("🎛️ Cấu hình hệ thống")
     
     if st.button("🔄 LÀM MỚI (RESET)"):
-        saved = st.session_state.feedback_history
         st.session_state.clear()
-        st.session_state.feedback_history = saved
         st.rerun()
 
-    # 1. API KEY
+    # 1. NHẬP KEY
     api_key_raw = st.secrets.get("GEMINI_API_KEY", "")
     eleven_api_raw = st.secrets.get("ELEVEN_API_KEY", "")
     hf_token_raw = st.secrets.get("HUGGINGFACE_TOKEN", "")
 
     if not api_key_raw: api_key_raw = st.text_input("Gemini API Key", type="password")
     if not eleven_api_raw: eleven_api_raw = st.text_input("ElevenLabs API Key", type="password")
-    if not hf_token_raw: hf_token_raw = st.text_input("HuggingFace Token (Quyền READ)", type="password")
+    if not hf_token_raw: hf_token_raw = st.text_input("HuggingFace Token (BẮT BUỘC)", type="password")
     
-    # Làm sạch Key (Xóa khoảng trắng thừa)
+    # Clean Keys
     api_key = api_key_raw.strip() if api_key_raw else ""
     eleven_api = eleven_api_raw.strip() if eleven_api_raw else ""
     hf_token = hf_token_raw.strip() if hf_token_raw else ""
@@ -63,10 +61,11 @@ with st.sidebar:
     if api_key: st.success("✅ Gemini: OK")
     if eleven_api: st.success("✅ ElevenLabs: OK")
     if hf_token: st.success("✅ HuggingFace: OK")
+    else: st.error("❌ Thiếu Token HuggingFace (Sẽ không tạo được ảnh)")
 
     st.divider()
     
-    # 2. CHỌN MODEL GEMINI
+    # 2. MODEL GEMINI
     st.subheader("🧠 Bộ não xử lý")
     available_models = ["models/gemini-pro"]
     if api_key:
@@ -79,28 +78,18 @@ with st.sidebar:
 
     st.divider()
 
-    # 3. CẤU HÌNH GIỌNG ĐỌC (NÂNG CẤP)
+    # 3. GIỌNG ĐỌC
     st.subheader("🔊 Nguồn giọng đọc")
-    tts_provider = st.selectbox("Chọn Server:", ["ElevenLabs (VIP)", "Microsoft (Miễn phí)", "Google (Dự phòng)"])
-    
-    # TÙY CHỌN MODEL ELEVENLABS (MỚI)
-    eleven_model_id = "eleven_multilingual_v2" # Mặc định
-    if "ElevenLabs" in tts_provider:
-        eleven_model_id = st.selectbox("Model ElevenLabs:", [
-            "eleven_multilingual_v2 (Chuẩn nhất)", 
-            "eleven_multilingual_v1 (Dự phòng)", 
-            "eleven_turbo_v2 (Nhanh & Rẻ)"
-        ])
-        st.caption("💡 Mẹo: Nếu V2 lỗi, hãy thử chuyển sang V1 hoặc Turbo.")
+    # Đã bỏ tùy chọn Google, chỉ còn nguồn xịn
+    tts_provider = st.selectbox("Chọn Server:", ["ElevenLabs (VIP)", "Microsoft (Miễn phí)"])
     
     edge_voice = "vi-VN-HoaiMyNeural" 
     if "Microsoft" in tts_provider:
         edge_voice = st.selectbox("Chọn giọng MS:", [
-            "vi-VN-HoaiMyNeural (Nữ - Truyền cảm)", 
-            "vi-VN-NamMinhNeural (Nam - Trầm ấm)"
+            "vi-VN-HoaiMyNeural (Nữ)", "vi-VN-NamMinhNeural (Nam)"
         ]).split(" ")[0]
 
-# --- HÀM XỬ LÝ ---
+# --- HÀM XỬ LÝ (CORE) ---
 
 def clean_text_for_audio(text):
     text = re.sub(r'\[.*?\]', '', text)
@@ -115,83 +104,95 @@ async def generate_edge_tts(text, voice, filename):
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(filename)
 
-def generate_audio_unified(text, filename, tone_key="Chuyên nghiệp"):
+def generate_audio_strict(text, filename, tone_key="Chuyên nghiệp"):
+    """
+    Hàm tạo Audio KHÔNG CÓ GOOGLE FALLBACK.
+    Nếu lỗi là dừng luôn.
+    """
     clean_text = clean_text_for_audio(text)
     if not clean_text: return False
     
-    # 1. ELEVENLABS (DEBUG MODE)
+    # 1. ELEVENLABS STRICT MODE
     if "ElevenLabs" in tts_provider:
         if not eleven_api:
-            st.error("❌ Thiếu API ElevenLabs! Vui lòng nhập Key.")
-        else:
-            voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx").strip()
+            st.error("❌ Lỗi: Bạn chọn ElevenLabs nhưng chưa nhập API Key!")
+            return False
             
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-            headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
-            # Dùng model ID được chọn từ Sidebar
-            data = {"text": clean_text, "model_id": eleven_model_id.split(" ")[0]}
-            
-            try:
-                # Tăng timeout lên 60s
-                response = requests.post(url, json=data, headers=headers, timeout=60)
-                if response.status_code == 200:
-                    with open(filename, 'wb') as f: f.write(response.content)
-                    return True
-                else:
-                    # IN LỖI CHI TIẾT RA MÀN HÌNH
-                    error_detail = response.json().get('detail', {}).get('message', 'Unknown Error')
-                    st.error(f"❌ ElevenLabs Lỗi ({response.status_code}): {error_detail}")
-                    st.toast(f"ElevenLabs thất bại: {error_detail}", icon="⚠️")
-                    # Không return True để nó nhảy xuống Google dự phòng (hoặc dừng lại tùy bạn)
-            except Exception as e:
-                st.error(f"❌ Lỗi kết nối ElevenLabs: {e}")
+        voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx").strip()
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
+        # Thử dùng turbo_v2 cho nhanh và ổn định
+        data = {"text": clean_text, "model_id": "eleven_turbo_v2"} 
+        
+        try:
+            # Tăng timeout lên 60s
+            response = requests.post(url, json=data, headers=headers, timeout=60)
+            if response.status_code == 200:
+                with open(filename, 'wb') as f: f.write(response.content)
+                return True
+            else:
+                # In thẳng lỗi ra màn hình cho người dùng thấy
+                error_msg = response.text
+                st.error(f"❌ ElevenLabs từ chối phục vụ: {response.status_code}")
+                st.code(error_msg) # Hiện chi tiết lỗi json
+                return False # Dừng, không chuyển google
+        except Exception as e:
+            st.error(f"❌ Lỗi kết nối mạng tới ElevenLabs: {e}")
+            return False
 
-    # 2. MICROSOFT EDGE TTS
+    # 2. MICROSOFT STRICT MODE
     if "Microsoft" in tts_provider:
         try:
             asyncio.run(generate_edge_tts(clean_text, edge_voice, filename))
             return True
-        except: pass
+        except Exception as e:
+            st.error(f"❌ Lỗi Microsoft TTS: {e}")
+            return False
 
-    # 3. GOOGLE TTS (Dự phòng cuối cùng)
-    try:
-        tts = gTTS(text=clean_text, lang='vi')
-        tts.save(filename)
-        return True
-    except: return False
+    return False
 
-def generate_image_data(prompt, width, height):
-    """Hugging Face + Pollinations Fallback"""
-    # 1. Hugging Face
-    if hf_token:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {hf_token}"}
-        style = ", high quality illustration, isometric style, flat design, cinematic lighting, no text"
-        full_prompt = prompt + style + (", vertical, 9:16 portrait" if width < height else ", wide angle, 16:9 landscape")
+def generate_image_huggingface_only(prompt, width, height):
+    """
+    CHỈ DÙNG HUGGING FACE.
+    Không Pollinations -> Không Rate Limit.
+    """
+    if not hf_token:
+        st.error("❌ Chưa có Token Hugging Face. Vui lòng nhập vào Sidebar.")
+        return None
 
-        try:
-            response = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=15)
-            if response.status_code == 200: return response.content
-        except: pass
-
-    # 2. Pollinations
-    seed = random.randint(1, 10000000)
-    ratio_prompt = ", vertical, 9:16" if width < height else ", wide angle, 16:9"
-    style = ", high quality illustration, isometric style, flat design"
-    clean_prompt = (prompt + style + ratio_prompt).replace(" ", "%20")
-    url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width={width}&height={height}&nologo=true&seed={seed}&model=flux"
+    # Sử dụng model SDXL Lightning (Siêu nhanh) hoặc Base
+    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    headers = {"Authorization": f"Bearer {hf_token}"}
     
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    for _ in range(3):
+    style = ", high quality illustration, isometric style, flat design, cinematic lighting, no text"
+    full_prompt = prompt + style
+    if width < height: full_prompt += ", vertical, 9:16 portrait"
+    else: full_prompt += ", wide angle, 16:9 landscape"
+
+    # Thử 3 lần (Retry) nếu HF server bận
+    for attempt in range(3):
         try:
-            resp = requests.get(url, headers=headers, timeout=20)
-            if resp.status_code == 200: return resp.content
-            time.sleep(2)
-        except: time.sleep(1)
+            response = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=20)
+            if response.status_code == 200:
+                return response.content
+            else:
+                # Nếu lỗi 503 (Model đang load) thì đợi chút rồi thử lại
+                err_info = response.json()
+                if 'estimated_time' in err_info:
+                    wait_time = err_info['estimated_time']
+                    st.toast(f"⏳ Model đang khởi động, đợi {wait_time:.1f}s...")
+                    time.sleep(wait_time + 1)
+                else:
+                    st.error(f"❌ HF Error {response.status_code}: {response.text}")
+                    return None
+        except Exception as e:
+            st.error(f"❌ Lỗi kết nối HF: {e}")
+            time.sleep(1)
             
     return None
 
-def process_scene(args):
+def process_scene_strict(args):
+    """Xử lý cảnh với quy tắc nghiêm ngặt"""
     part, width, height, tone = args
     try:
         if "|" in part:
@@ -201,40 +202,51 @@ def process_scene(args):
             img_prompt = data[0].replace("Scene", "").replace(":", "").strip()
             raw_voice_text = data[1].strip()
             
+            # 1. Tạo Audio
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                 audio_path = f.name
             
-            success = generate_audio_unified(raw_voice_text, audio_path, tone)
-            if not success: return None
+            # Gọi hàm Strict (Không Google)
+            success = generate_audio_strict(raw_voice_text, audio_path, tone)
+            
+            if not success:
+                st.warning(f"⚠️ Bỏ qua cảnh này do lỗi âm thanh: '{raw_voice_text[:20]}...'")
+                return None # Bỏ qua cảnh này luôn
 
-            img_content = generate_image_data(img_prompt, width, height)
+            # 2. Tạo Ảnh (Chỉ HF)
+            img_content = generate_image_huggingface_only(img_prompt, width, height)
+            
             if img_content:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
                     f.write(img_content); img_path = f.name
                 return (audio_path, img_path)
             else:
+                # Nếu ảnh lỗi, trả về placeholder đen để giữ tiếng
                 return (audio_path, "PLACEHOLDER")
-    except: return None
+    except Exception as e:
+        st.error(f"Lỗi xử lý cảnh: {e}")
+        return None
 
-def create_video_from_script(script_data, width, height, tone):
+def create_video_strict(script_data, width, height, tone):
     lines = [line for line in script_data.strip().split('\n') if "|" in line and "Scene" in line]
-    if len(lines) > 10: lines = lines[:10]
+    if len(lines) > 10: lines = lines[:10] # Max 10 cảnh demo
+    
     total_scenes = len(lines)
     if total_scenes == 0: return None
 
     progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.text(f"🚀 Đang xử lý tài nguyên (Đơn luồng an toàn)...")
+    status_text.text(f"🚀 Đang xử lý tuần tự (HuggingFace Only + No Google)...")
     
     process_args = [(line, width, height, tone) for line in lines]
     
     results = []
-    # CHẠY 1 LUỒNG
+    # Chạy tuần tự để dễ debug lỗi
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        for i, result in enumerate(executor.map(process_scene, process_args)):
+        for i, result in enumerate(executor.map(process_scene_strict, process_args)):
             results.append(result)
             progress_bar.progress(int((i + 1) / total_scenes * 100))
-        
+            
     status_text.text("🎬 Đang render video...")
     clips = []
     for asset in results:
@@ -258,7 +270,9 @@ def create_video_from_script(script_data, width, height, tone):
             status_text.text("✅ Xong!")
             progress_bar.empty()
             return f.name
-        except: return None
+        except Exception as e:
+            st.error(f"Lỗi Render Video: {e}")
+            return None
     return None
 
 def render_mixed_content(text, width=800, height=450):
@@ -270,11 +284,11 @@ def render_mixed_content(text, width=800, height=450):
         else:
             img_prompt = part.strip().replace("}", "").replace("{", "")
             if img_prompt:
-                img_content = generate_image_data(img_prompt, width, height)
+                img_content = generate_image_huggingface_only(img_prompt, width, height)
                 if img_content:
                     st.image(img_content, caption=f"🎨 {img_prompt}", use_container_width=True)
                 else:
-                    st.warning("⚠️ Không tải được ảnh.")
+                    st.warning("⚠️ Lỗi tải ảnh (HuggingFace)")
 
 # --- GIAO DIỆN CHÍNH ---
 st.title("🛡️ DAT Media AI Studio")
@@ -320,9 +334,17 @@ with col1:
 with col2:
     st.subheader("2. Kết quả")
     if btn_run:
-        if not api_key: st.error("Chưa kết nối Gemini API")
-        else:
-            with st.spinner(f"AI đang quét model và xử lý..."):
+        # CHECK NGHIÊM NGẶT CÁC TOKEN
+        error = False
+        if not api_key: 
+            st.error("Chưa nhập Gemini API Key"); error=True
+        if content_type != "Bài Facebook" and not hf_token: # Facebook/Web/Video cần ảnh
+             st.error("Chưa nhập HuggingFace Token (Không thể tạo ảnh)"); error=True
+        if "ElevenLabs" in tts_provider and not eleven_api:
+             st.error("Chưa nhập ElevenLabs Key"); error=True
+
+        if not error:
+            with st.spinner(f"AI đang tư duy..."):
                 try:
                     st.session_state.video_settings = {'w': video_w, 'h': video_h}
                     st.session_state.tone_key = tone
@@ -333,7 +355,7 @@ with col2:
                     past_fb = "\n".join([f"- {fb}" for fb in st.session_state.feedback_history])
                     prompt = f"""
                     Chủ đề: {keyword}. Lĩnh vực: {sector}. Tone: {tone}.
-                    YÊU CẦU ĐẦU RA:
+                    YÊU CẦU:
                     1. TIÊU ĐỀ CHUẨN SEO
                     2. 5 HASHTAGS & 5 TAGS
                     3. NỘI DUNG: {seo_guide}
@@ -345,17 +367,17 @@ with col2:
                     st.session_state.type = content_type
                     st.session_state.kw = keyword
                     st.success("Đã có nội dung!")
-                except Exception as e: st.error(f"Lỗi: {e}")
+                except Exception as e: st.error(f"Lỗi Gemini: {e}")
 
     if 'result' in st.session_state:
         if st.session_state.type == "Bài Website":
-            st.info("🖼️ Ảnh Featured")
-            img_content = generate_image_data(f"{st.session_state.kw} insurance header", 1200, 628)
+            st.info("🖼️ Ảnh Featured (HuggingFace Only)")
+            img_content = generate_image_huggingface_only(f"{st.session_state.kw} insurance header", 1200, 628)
             if img_content: st.image(img_content, use_container_width=True)
             render_mixed_content(st.session_state.result)
         elif st.session_state.type == "Bài Facebook":
-            st.info("📱 Ảnh Vuông")
-            img_content = generate_image_data(f"{st.session_state.kw} flat lay", 1080, 1080)
+            st.info("📱 Ảnh Vuông (HuggingFace Only)")
+            img_content = generate_image_huggingface_only(f"{st.session_state.kw} flat lay", 1080, 1080)
             if img_content: st.image(img_content, width=450)
             st.markdown(st.session_state.result)
         else:
@@ -367,10 +389,11 @@ with col2:
                 
                 if "ElevenLabs" in tts_provider:
                     current_id = VOICE_MAP.get(tk, "").strip()
-                    st.info(f"🎙️ ElevenLabs: `{current_id}` (Tone: {tk})")
+                    st.info(f"🎙️ ElevenLabs: `{current_id}` (No Google Fallback)")
                 
                 if st.button("🎥 Dựng Video"):
-                    v_path = create_video_from_script(st.session_state.result, vw, vh, tk)
+                    # Gọi hàm Strict
+                    v_path = create_video_strict(st.session_state.result, vw, vh, tk)
                     if v_path: st.video(v_path)
             with tab2:
                 st.text_area("Script", st.session_state.result, height=500)
