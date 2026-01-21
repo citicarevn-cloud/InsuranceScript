@@ -260,7 +260,7 @@ def render_mixed_content(text, width=800, height=450):
                     st.warning("⚠️ Lỗi tải ảnh (HF)")
 
 # --- GIAO DIỆN CHÍNH (NÂNG CẤP PILLAR & ANGLE) ---
-st.title("🛡️ DAT Media AI Studio: Content Architect")
+st.title("🛡️ Insurance Script")
 
 col1, col2 = st.columns([1, 1.5], gap="large")
 
