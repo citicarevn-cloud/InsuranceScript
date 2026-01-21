@@ -61,7 +61,7 @@ with st.sidebar:
     if api_key: st.success("✅ Gemini: OK")
     if eleven_api: st.success("✅ ElevenLabs: OK")
     if hf_token: st.success("✅ HuggingFace: OK")
-    else: st.error("❌ Thiếu Token HuggingFace (Sẽ không tạo được ảnh)")
+    else: st.error("❌ Thiếu Token HuggingFace")
 
     st.divider()
     
@@ -80,7 +80,6 @@ with st.sidebar:
 
     # 3. GIỌNG ĐỌC
     st.subheader("🔊 Nguồn giọng đọc")
-    # Đã bỏ tùy chọn Google, chỉ còn nguồn xịn
     tts_provider = st.selectbox("Chọn Server:", ["ElevenLabs (VIP)", "Microsoft (Miễn phí)"])
     
     edge_voice = "vi-VN-HoaiMyNeural" 
@@ -105,10 +104,6 @@ async def generate_edge_tts(text, voice, filename):
     await communicate.save(filename)
 
 def generate_audio_strict(text, filename, tone_key="Chuyên nghiệp"):
-    """
-    Hàm tạo Audio KHÔNG CÓ GOOGLE FALLBACK.
-    Nếu lỗi là dừng luôn.
-    """
     clean_text = clean_text_for_audio(text)
     if not clean_text: return False
     
@@ -121,23 +116,20 @@ def generate_audio_strict(text, filename, tone_key="Chuyên nghiệp"):
         voice_id = VOICE_MAP.get(tone_key, "mJLZ5p8I7Pk81BHpKwbx").strip()
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
         headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
-        # Thử dùng turbo_v2 cho nhanh và ổn định
-        data = {"text": clean_text, "model_id": "eleven_turbo_v2"} 
+        # Tự động chọn model ổn định
+        data = {"text": clean_text, "model_id": "eleven_multilingual_v2"} 
         
         try:
-            # Tăng timeout lên 60s
             response = requests.post(url, json=data, headers=headers, timeout=60)
             if response.status_code == 200:
                 with open(filename, 'wb') as f: f.write(response.content)
                 return True
             else:
-                # In thẳng lỗi ra màn hình cho người dùng thấy
-                error_msg = response.text
-                st.error(f"❌ ElevenLabs từ chối phục vụ: {response.status_code}")
-                st.code(error_msg) # Hiện chi tiết lỗi json
-                return False # Dừng, không chuyển google
+                st.error(f"❌ ElevenLabs từ chối: {response.status_code}")
+                st.code(response.text)
+                return False 
         except Exception as e:
-            st.error(f"❌ Lỗi kết nối mạng tới ElevenLabs: {e}")
+            st.error(f"❌ Lỗi kết nối ElevenLabs: {e}")
             return False
 
     # 2. MICROSOFT STRICT MODE
@@ -152,15 +144,10 @@ def generate_audio_strict(text, filename, tone_key="Chuyên nghiệp"):
     return False
 
 def generate_image_huggingface_only(prompt, width, height):
-    """
-    CHỈ DÙNG HUGGING FACE.
-    Không Pollinations -> Không Rate Limit.
-    """
     if not hf_token:
-        st.error("❌ Chưa có Token Hugging Face. Vui lòng nhập vào Sidebar.")
+        st.error("❌ Chưa có Token Hugging Face.")
         return None
 
-    # Sử dụng model SDXL Lightning (Siêu nhanh) hoặc Base
     API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
     headers = {"Authorization": f"Bearer {hf_token}"}
     
@@ -169,30 +156,24 @@ def generate_image_huggingface_only(prompt, width, height):
     if width < height: full_prompt += ", vertical, 9:16 portrait"
     else: full_prompt += ", wide angle, 16:9 landscape"
 
-    # Thử 3 lần (Retry) nếu HF server bận
     for attempt in range(3):
         try:
             response = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=20)
             if response.status_code == 200:
                 return response.content
             else:
-                # Nếu lỗi 503 (Model đang load) thì đợi chút rồi thử lại
                 err_info = response.json()
                 if 'estimated_time' in err_info:
                     wait_time = err_info['estimated_time']
                     st.toast(f"⏳ Model đang khởi động, đợi {wait_time:.1f}s...")
                     time.sleep(wait_time + 1)
                 else:
-                    st.error(f"❌ HF Error {response.status_code}: {response.text}")
                     return None
-        except Exception as e:
-            st.error(f"❌ Lỗi kết nối HF: {e}")
-            time.sleep(1)
+        except: time.sleep(1)
             
     return None
 
 def process_scene_strict(args):
-    """Xử lý cảnh với quy tắc nghiêm ngặt"""
     part, width, height, tone = args
     try:
         if "|" in part:
@@ -202,18 +183,13 @@ def process_scene_strict(args):
             img_prompt = data[0].replace("Scene", "").replace(":", "").strip()
             raw_voice_text = data[1].strip()
             
-            # 1. Tạo Audio
             with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
                 audio_path = f.name
             
-            # Gọi hàm Strict (Không Google)
             success = generate_audio_strict(raw_voice_text, audio_path, tone)
             
-            if not success:
-                st.warning(f"⚠️ Bỏ qua cảnh này do lỗi âm thanh: '{raw_voice_text[:20]}...'")
-                return None # Bỏ qua cảnh này luôn
+            if not success: return None
 
-            # 2. Tạo Ảnh (Chỉ HF)
             img_content = generate_image_huggingface_only(img_prompt, width, height)
             
             if img_content:
@@ -221,27 +197,22 @@ def process_scene_strict(args):
                     f.write(img_content); img_path = f.name
                 return (audio_path, img_path)
             else:
-                # Nếu ảnh lỗi, trả về placeholder đen để giữ tiếng
                 return (audio_path, "PLACEHOLDER")
-    except Exception as e:
-        st.error(f"Lỗi xử lý cảnh: {e}")
-        return None
+    except: return None
 
 def create_video_strict(script_data, width, height, tone):
     lines = [line for line in script_data.strip().split('\n') if "|" in line and "Scene" in line]
-    if len(lines) > 10: lines = lines[:10] # Max 10 cảnh demo
-    
+    if len(lines) > 10: lines = lines[:10]
     total_scenes = len(lines)
     if total_scenes == 0: return None
 
     progress_bar = st.progress(0)
     status_text = st.empty()
-    status_text.text(f"🚀 Đang xử lý tuần tự (HuggingFace Only + No Google)...")
+    status_text.text(f"🚀 Đang xử lý Pillar & Angle...")
     
     process_args = [(line, width, height, tone) for line in lines]
     
     results = []
-    # Chạy tuần tự để dễ debug lỗi
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         for i, result in enumerate(executor.map(process_scene_strict, process_args)):
             results.append(result)
@@ -270,9 +241,7 @@ def create_video_strict(script_data, width, height, tone):
             status_text.text("✅ Xong!")
             progress_bar.empty()
             return f.name
-        except Exception as e:
-            st.error(f"Lỗi Render Video: {e}")
-            return None
+        except: return None
     return None
 
 def render_mixed_content(text, width=800, height=450):
@@ -288,24 +257,43 @@ def render_mixed_content(text, width=800, height=450):
                 if img_content:
                     st.image(img_content, caption=f"🎨 {img_prompt}", use_container_width=True)
                 else:
-                    st.warning("⚠️ Lỗi tải ảnh (HuggingFace)")
+                    st.warning("⚠️ Lỗi tải ảnh (HF)")
 
-# --- GIAO DIỆN CHÍNH ---
-st.title("🛡️ DAT Media AI Studio")
+# --- GIAO DIỆN CHÍNH (NÂNG CẤP PILLAR & ANGLE) ---
+st.title("🛡️ DAT Media AI Studio: Content Architect")
 
 col1, col2 = st.columns([1, 1.5], gap="large")
 
 with col1:
-    st.subheader("1. Thiết lập nội dung")
-    keyword = st.text_input("Chủ đề chính", "Bảo hiểm nhân thọ cho người trụ cột")
-    sector = st.selectbox("Lĩnh vực", ["Bảo hiểm Nhân thọ", "Bảo hiểm Phi Nhân thọ", "Bảo hiểm Sức khoẻ"])
-    content_type = st.radio("Loại nội dung", ["Clip (Video)", "Bài Website", "Bài Facebook"])
+    st.subheader("1. Kiến trúc nội dung")
+    
+    # [NÂNG CẤP 1] THÊM PILLAR & ANGLE
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        pillar = st.selectbox("1. Nhóm chủ đề (Pillar)", [
+            "Kiến thức & Giáo dục (Educate)",
+            "Sản phẩm & Giải pháp (Product)", 
+            "Niềm tin & Bằng chứng (Trust)",
+            "Phong cách sống & Cảm xúc (Lifestyle)"
+        ])
+    with col_p2:
+        angle = st.selectbox("2. Góc tiếp cận (Angle)", [
+            "Chuyên gia phân tích (Logic)",
+            "Kể chuyện (Storytelling)",
+            "Cảnh báo/Bóc trần (Drama)",
+            "Hài hước/Đu Trend (Fun)",
+            "Q&A Giải đáp (Helpful)"
+        ])
+
+    keyword = st.text_input("3. Từ khóa cụ thể", "Bảo hiểm nhân thọ cho người trụ cột")
+    
+    content_type = st.radio("4. Định dạng", ["Clip (Video)", "Bài Website", "Bài Facebook"])
     
     seo_guide = ""
     video_w, video_h = 1280, 720
     
     if content_type == "Clip (Video)":
-        orientation = st.radio("Khung hình:", ["Ngang 16:9 (YouTube)", "Dọc 9:16 (TikTok/Shorts)"], horizontal=True)
+        orientation = st.radio("Khung hình:", ["Ngang 16:9", "Dọc 9:16"], horizontal=True)
         if "Ngang" in orientation:
             video_w, video_h = 1280, 720; ratio_txt = "Wide 16:9"
         else:
@@ -317,16 +305,25 @@ with col1:
 
         seo_guide = f"""
         - Viết Kịch bản Video ({ratio_txt}) dài {dur_txt}.
+        - Phong cách: {angle}. Trụ cột: {pillar}.
         - Định dạng BẮT BUỘC từng dòng: 'Scene X: [Mô tả ảnh tiếng Anh] | [Lời bình tiếng Việt]'.
         """
     elif content_type == "Bài Website":
         words = st.number_input("Số từ", 500, 2500, 1000)
-        seo_guide = f"- Viết bài chuẩn SEO {words} từ. BẮT BUỘC dùng thẻ {{IMAGE: english prompt}} xen kẽ."
+        seo_guide = f"- Viết bài Website ({pillar}) chuẩn SEO {words} từ. Góc nhìn: {angle}. Dùng thẻ {{IMAGE: english prompt}} xen kẽ."
     else:
-        seo_guide = "- Viết Caption Facebook thu hút. Đề xuất ảnh vuông."
+        seo_guide = f"- Viết Caption Facebook ({angle}) cho chủ đề {pillar}. Đề xuất ảnh vuông."
 
-    tone_options = ["Chuyên nghiệp", "Đời thường", "Cảm động", "Hài hước"]
-    tone = st.select_slider("Tone giọng & Phong cách", tone_options)
+    # Tự động map Tone giọng theo Angle để chọn Voice cho chuẩn
+    tone_map = {
+        "Chuyên gia phân tích (Logic)": "Chuyên nghiệp",
+        "Kể chuyện (Storytelling)": "Cảm động",
+        "Cảnh báo/Bóc trần (Drama)": "Chuyên nghiệp",
+        "Hài hước/Đu Trend (Fun)": "Hài hước",
+        "Q&A Giải đáp (Helpful)": "Đời thường"
+    }
+    tone_auto = tone_map.get(angle, "Chuyên nghiệp")
+    st.info(f"🎙️ Tone giọng AI đề xuất: **{tone_auto}** (Bạn có thể đổi ở Sidebar nếu muốn)")
     
     btn_run = st.button("🚀 XỬ LÝ NGAY")
 
@@ -334,32 +331,39 @@ with col1:
 with col2:
     st.subheader("2. Kết quả")
     if btn_run:
-        # CHECK NGHIÊM NGẶT CÁC TOKEN
         error = False
-        if not api_key: 
-            st.error("Chưa nhập Gemini API Key"); error=True
-        if content_type != "Bài Facebook" and not hf_token: # Facebook/Web/Video cần ảnh
-             st.error("Chưa nhập HuggingFace Token (Không thể tạo ảnh)"); error=True
-        if "ElevenLabs" in tts_provider and not eleven_api:
-             st.error("Chưa nhập ElevenLabs Key"); error=True
+        if not api_key: st.error("Thiếu Gemini Key"); error=True
+        if content_type != "Bài Facebook" and not hf_token: st.error("Thiếu HuggingFace Token"); error=True
+        if "ElevenLabs" in tts_provider and not eleven_api: st.error("Thiếu ElevenLabs Key"); error=True
 
         if not error:
-            with st.spinner(f"AI đang tư duy..."):
+            with st.spinner(f"AI đang sáng tạo theo Pillar & Angle..."):
                 try:
                     st.session_state.video_settings = {'w': video_w, 'h': video_h}
-                    st.session_state.tone_key = tone
+                    st.session_state.tone_key = tone_auto # Dùng tone tự động map theo Angle
                     
                     genai.configure(api_key=api_key)
                     model = genai.GenerativeModel(selected_model) 
                     
                     past_fb = "\n".join([f"- {fb}" for fb in st.session_state.feedback_history])
+                    
+                    # PROMPT NÂNG CẤP (QUAN TRỌNG)
                     prompt = f"""
-                    Chủ đề: {keyword}. Lĩnh vực: {sector}. Tone: {tone}.
-                    YÊU CẦU:
-                    1. TIÊU ĐỀ CHUẨN SEO
-                    2. 5 HASHTAGS & 5 TAGS
-                    3. NỘI DUNG: {seo_guide}
-                    LƯU Ý: Không dùng dấu ** trong lời bình.
+                    Vai trò: Chuyên gia Content Marketing ngành Bảo Hiểm.
+                    Nhiệm vụ: Tạo nội dung theo kiến trúc Pillar & Angle.
+                    
+                    1. INPUT:
+                       - Chủ đề (Topic): {keyword}
+                       - Trụ cột (Pillar): {pillar} (Hãy bám sát định hướng này)
+                       - Góc độ (Angle): {angle} (Hãy dùng giọng văn và cấu trúc này)
+                    
+                    2. YÊU CẦU ĐẦU RA:
+                       - TIÊU ĐỀ CHUẨN SEO (Giật tít theo Angle {angle})
+                       - 5 HASHTAGS & 5 TAGS
+                       - NỘI DUNG CHÍNH:
+                         {seo_guide}
+                    
+                    LƯU Ý: Không dùng dấu ** trong lời bình video.
                     LƯU Ý USER: {past_fb}
                     """
                     response = model.generate_content(prompt)
@@ -371,12 +375,12 @@ with col2:
 
     if 'result' in st.session_state:
         if st.session_state.type == "Bài Website":
-            st.info("🖼️ Ảnh Featured (HuggingFace Only)")
+            st.info("🖼️ Ảnh Featured")
             img_content = generate_image_huggingface_only(f"{st.session_state.kw} insurance header", 1200, 628)
             if img_content: st.image(img_content, use_container_width=True)
             render_mixed_content(st.session_state.result)
         elif st.session_state.type == "Bài Facebook":
-            st.info("📱 Ảnh Vuông (HuggingFace Only)")
+            st.info("📱 Ảnh Vuông")
             img_content = generate_image_huggingface_only(f"{st.session_state.kw} flat lay", 1080, 1080)
             if img_content: st.image(img_content, width=450)
             st.markdown(st.session_state.result)
@@ -389,10 +393,9 @@ with col2:
                 
                 if "ElevenLabs" in tts_provider:
                     current_id = VOICE_MAP.get(tk, "").strip()
-                    st.info(f"🎙️ ElevenLabs: `{current_id}` (No Google Fallback)")
+                    st.info(f"🎙️ Voice ID: `{current_id}` (Theo Angle: {tk})")
                 
                 if st.button("🎥 Dựng Video"):
-                    # Gọi hàm Strict
                     v_path = create_video_strict(st.session_state.result, vw, vh, tk)
                     if v_path: st.video(v_path)
             with tab2:
