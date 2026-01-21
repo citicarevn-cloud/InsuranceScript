@@ -13,7 +13,7 @@ import concurrent.futures
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, ColorClip
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="DAT Media AI Studio", layout="wide", page_icon="🎙️")
+st.set_page_config(page_title="Insurance Script", layout="wide", page_icon="🎙️")
 
 # --- CSS ---
 st.markdown("""
