@@ -18,6 +18,7 @@ st.markdown("""
     <style>
     .stButton>button {background-color: #0068C9; color: white; font-weight: bold; border-radius: 8px; height: 3em; width: 100%;}
     img {border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 10px 0;}
+    .stMarkdown {font-family: 'Helvetica', sans-serif;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -60,7 +61,7 @@ with st.sidebar:
 
     st.divider()
     
-    # 2. MODULE QUÉT MODEL (AUTO SCANNER)
+    # 2. MODULE QUÉT MODEL
     st.subheader("🧠 Bộ não xử lý")
     available_models = []
     if api_key:
@@ -121,52 +122,61 @@ def gen_audio(text, fname, tone):
     except: return False
 
 def gen_image_safe(prompt, w, h):
-    """
-    Chiến thuật: HF SDXL -> HF v1.5 -> Stock Backup
-    Nghỉ 4s giữa mỗi lần gọi để tránh Rate Limit.
-    """
-    # URL 1: Model SDXL (Đẹp nhưng hay quá tải)
-    API_URL_1 = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-    # URL 2: Model v1.5 (Nhẹ, ổn định hơn)
-    API_URL_2 = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
-    
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    
-    # Prompt tinh chỉnh
-    full_prompt = prompt + ", masterpiece, high quality, cinematic lighting, corporate insurance style, no text"
-    full_prompt += ", vertical 9:16 portrait" if w < h else ", wide 16:9 landscape"
-
-    # THỬ MODEL 1 (SDXL)
+    """Chiến thuật Hybrid: HF -> Pollinations -> Stock -> Placeholder"""
+    # 1. Hugging Face
     if hf_token:
+        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {hf_token}"}
+        full_prompt = prompt + ", masterpiece, high quality, corporate insurance style, no text"
+        full_prompt += ", vertical 9:16 portrait" if w < h else ", wide 16:9 landscape"
         try:
-            res = requests.post(API_URL_1, headers=headers, json={"inputs": full_prompt}, timeout=15)
+            res = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=15)
             if res.status_code == 200: 
-                time.sleep(4) # NGHỈ 4 GIÂY QUAN TRỌNG
+                time.sleep(3) # Nghỉ 3s
                 return res.content
         except: pass
 
-    # THỬ MODEL 2 (V1.5) - Nếu model 1 lỗi
-    if hf_token:
-        try:
-            # Nghỉ chút trước khi thử lại
-            time.sleep(2)
-            res = requests.post(API_URL_2, headers=headers, json={"inputs": full_prompt}, timeout=15)
-            if res.status_code == 200: 
-                time.sleep(4) # NGHỈ 4 GIÂY QUAN TRỌNG
-                return res.content
-        except: pass
-
-    # PHƯƠNG ÁN CUỐI: ẢNH STOCK DỰ PHÒNG (KHÔNG BAO GIỜ ĐEN)
-    # Lấy ảnh ngẫu nhiên từ Picsum (mỗi lần 1 ảnh khác nhau)
+    # 2. Pollinations
     try:
-        random_id = int(time.time()) % 1000
-        stock_url = f"https://picsum.photos/seed/{random_id}/{w}/{h}"
+        clean_prompt = prompt.replace(" ", "%20")
+        url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width={w}&height={h}&nologo=true&seed={int(time.time())}&model=flux"
+        res = requests.get(url, timeout=20)
+        if res.status_code == 200: return res.content
+    except: pass
+
+    # 3. Stock Backup
+    try:
+        stock_url = f"https://picsum.photos/seed/{int(time.time())}/{w}/{h}"
         res = requests.get(stock_url, timeout=10)
         if res.status_code == 200: return res.content
     except: pass
 
-    # NẾU MẤT MẠNG HOÀN TOÀN -> DÙNG MÀN HÌNH MÀU
     return None
+
+# --- HÀM XỬ LÝ BÀI VIẾT WEBSITE (FIXED) ---
+def render_mixed_content(text):
+    """
+    Tách văn bản và lệnh {IMAGE: ...} để hiển thị ảnh thực tế
+    """
+    # Regex tìm thẻ {IMAGE: ...}
+    parts = re.split(r'\{IMAGE:\s*(.*?)\}', text, flags=re.IGNORECASE)
+    
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            # Phần chẵn là văn bản thường
+            if part.strip():
+                st.markdown(part)
+        else:
+            # Phần lẻ là Prompt ảnh
+            prompt = part.strip()
+            if prompt:
+                with st.spinner(f"🎨 Đang vẽ minh họa: {prompt[:30]}..."):
+                    # Dùng hàm tạo ảnh Safe (giống Video)
+                    img_data = gen_image_safe(prompt, 800, 450)
+                    if img_data:
+                        st.image(img_data, caption=f"Minh họa: {prompt}", use_container_width=True)
+                    else:
+                        st.warning(f"⚠️ Không tải được ảnh: {prompt}")
 
 def create_video(script, w, h, tone):
     lines = [l for l in script.split('\n') if "|" in l and ("Scene" in l or "Cảnh" in l)][:10]
@@ -174,12 +184,11 @@ def create_video(script, w, h, tone):
         st.error("⚠️ Lỗi kịch bản: Không tìm thấy dòng 'Scene X: ... | ...'")
         return None
         
-    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ An toàn - Chậm để chắc)...")
+    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ An toàn)...")
     bar = st.progress(0)
     
     clips = []
     
-    # CHẠY TUẦN TỰ (Sequential Loop)
     for i, line in enumerate(lines):
         parts = line.split("|")
         if len(parts) < 2: continue
@@ -199,13 +208,12 @@ def create_video(script, w, h, tone):
         else:
             img_path = "PLACEHOLDER"
         
-        # 3. Tạo Clip con
+        # 3. Clip
         try:
             ac = AudioFileClip(af)
             dur = ac.duration + 0.5
             
             if img_path == "PLACEHOLDER":
-                # Màn hình xanh chữ trắng (Thay vì đen)
                 txt_clip = TextClip("Đang tải ảnh...", fontsize=30, color='white', size=(w,h)).set_duration(dur)
                 bg_clip = ColorClip(size=(w, h), color=(0,50,100), duration=dur)
                 clip = CompositeVideoClip([bg_clip, txt_clip])
@@ -260,7 +268,8 @@ with col1:
         
     elif fmt == "Bài Website":
         words = st.slider("Số từ", 500, 2000, 1000)
-        seo_guide = f"Viết bài chuẩn SEO {words} từ. BẮT BUỘC chèn thẻ {{IMAGE: prompt tiếng Anh}} xen kẽ."
+        # Sửa prompt để AI trả về đúng định dạng cho hàm render
+        seo_guide = f"Viết bài chuẩn SEO {words} từ. BẮT BUỘC chèn thẻ {{IMAGE: prompt tiếng Anh}} xen kẽ vào bài viết để minh họa."
         
     else:
         seo_guide = "Viết Caption Facebook thu hút. Đề xuất ảnh vuông."
@@ -274,7 +283,6 @@ with col1:
         else:
             with st.spinner("AI đang viết..."):
                 try:
-                    # Model được lấy từ danh sách quét
                     model = genai.GenerativeModel(selected_model)
                     
                     prompt = f"""
@@ -290,6 +298,7 @@ with col1:
                     st.session_state.res = response.text
                     st.session_state.fmt = fmt
                     st.session_state.sets = {'w': vw, 'h': vh, 'tone': auto_tone}
+                    st.session_state.kw = kw # Lưu từ khóa để tạo ảnh featured
                     st.success("Đã xong!")
                 except Exception as e:
                     st.error(f"❌ Lỗi AI: {e}")
@@ -300,13 +309,22 @@ with col2:
         res = st.session_state.res
         ft = st.session_state.fmt
         sets = st.session_state.sets
+        kw_saved = st.session_state.get('kw', 'insurance')
         
         if ft == "Bài Website":
-            st.image(gen_image_safe(f"{kw} insurance header", 1200, 628) or "https://via.placeholder.com/1200x628", use_container_width=True)
-            st.markdown(res)
+            # 1. Ảnh Featured (Đầu bài)
+            st.info("🖼️ Ảnh Featured")
+            feat_img = gen_image_safe(f"{kw_saved} insurance header illustration", 1200, 628)
+            if feat_img: st.image(feat_img, use_container_width=True)
+            
+            # 2. Nội dung bài viết (Có chèn ảnh minh họa)
+            st.write("---")
+            render_mixed_content(res) # <--- HÀM MỚI Ở ĐÂY
             
         elif ft == "Bài Facebook":
-            st.image(gen_image_safe(f"{kw} flat lay", 1080, 1080) or "https://via.placeholder.com/1080", width=450)
+            st.info("📱 Ảnh Vuông")
+            img = gen_image_safe(f"{kw_saved} flat lay", 1080, 1080)
+            if img: st.image(img, width=450)
             st.markdown(res)
             
         else: # Video
