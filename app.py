@@ -7,26 +7,24 @@ import asyncio
 import tempfile
 import edge_tts
 import imageio_ffmpeg
-from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, ColorClip
+from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips, ColorClip, TextClip, CompositeVideoClip
 import google.generativeai as genai
 
 # --- 1. CẤU HÌNH APP ---
-st.set_page_config(page_title="Insurance Script", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Insurance Script Pro", layout="wide", page_icon="🛡️")
 
 # --- CSS ---
 st.markdown("""
     <style>
     .stButton>button {background-color: #0068C9; color: white; font-weight: bold; border-radius: 8px; height: 3em; width: 100%;}
     img {border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 10px 0;}
-    .reportview-container {background: #f0f2f6;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- KIỂM TRA FFMPEG (BẮT BUỘC) ---
+# --- KIỂM TRA FFMPEG ---
 ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
 if not os.path.exists(ffmpeg_path):
-    st.error("❌ LỖI: Không tìm thấy FFmpeg. Video sẽ không chạy.")
-    st.info("👉 Hãy vào GitHub tạo file `packages.txt` và điền chữ: `ffmpeg`")
+    st.error("❌ LỖI: Không tìm thấy FFmpeg. Hãy tạo file `packages.txt` trên GitHub với nội dung `ffmpeg`.")
 
 # --- QUẢN LÝ SESSION ---
 if 'history' not in st.session_state: st.session_state.history = []
@@ -62,20 +60,17 @@ with st.sidebar:
 
     st.divider()
     
-    # 2. MODULE DÒ TÌM MODEL (ĐÃ KHÔI PHỤC)
+    # 2. MODULE QUÉT MODEL (AUTO SCANNER)
     st.subheader("🧠 Bộ não xử lý")
     available_models = []
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            # Quét danh sách model thực tế từ tài khoản của bạn
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
                     available_models.append(m.name)
-        except Exception as e:
-            st.error(f"Lỗi kết nối Google: {e}")
+        except: pass
     
-    # Nếu không quét được thì fallback về list mặc định, nhưng ưu tiên list quét được
     if not available_models:
         available_models = ["models/gemini-1.5-flash", "models/gemini-pro"]
         
@@ -105,16 +100,14 @@ def gen_audio(text, fname, tone):
     text = clean_text(text)
     if not text: return False
     
-    # ElevenLabs
     if "ElevenLabs" in tts_provider:
         if not eleven_api:
-            st.warning("⚠️ Chọn ElevenLabs nhưng thiếu Key. Dùng Microsoft thay thế.")
+            st.warning("⚠️ Thiếu ElevenLabs Key. Dùng Microsoft thay thế.")
         else:
             vid = VOICE_MAP.get(tone, "mJLZ5p8I7Pk81BHpKwbx")
             try:
                 url = f"https://api.elevenlabs.io/v1/text-to-speech/{vid}"
                 headers = {"xi-api-key": eleven_api, "Content-Type": "application/json"}
-                # Model turbo v2_5 cho nhanh
                 data = {"text": text, "model_id": "eleven_turbo_v2_5"}
                 res = requests.post(url, json=data, headers=headers, timeout=60)
                 if res.status_code == 200:
@@ -122,42 +115,56 @@ def gen_audio(text, fname, tone):
                     return True
             except: pass
 
-    # Microsoft (Fallback)
     try:
         asyncio.run(gen_edge_tts(text, edge_voice, fname))
         return True
     except: return False
 
-def gen_image(prompt, w, h):
-    """HuggingFace Only"""
-    if not hf_token: return None
-    API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    
-    full_prompt = prompt + ", high quality illustration, isometric, no text"
-    full_prompt += ", vertical 9:16" if w < h else ", wide 16:9"
-    
-    for _ in range(3):
+def gen_image_hybrid(prompt, w, h):
+    """
+    Chiến thuật Hybrid: HuggingFace -> Pollinations -> Placeholder
+    Không bao giờ trả về None (Đen xì)
+    """
+    # 1. Thử Hugging Face (Ưu tiên)
+    if hf_token:
+        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+        headers = {"Authorization": f"Bearer {hf_token}"}
+        full_prompt = prompt + ", high quality illustration, isometric, no text"
+        full_prompt += ", vertical 9:16" if w < h else ", wide 16:9"
         try:
-            res = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=25)
+            res = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=20)
             if res.status_code == 200: return res.content
-            time.sleep(2)
-        except: time.sleep(1)
+        except: pass
+
+    # 2. Thử Pollinations (Dự phòng - Single Thread nên an toàn hơn)
+    try:
+        clean_prompt = prompt.replace(" ", "%20")
+        url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width={w}&height={h}&nologo=true&seed={int(time.time())}&model=flux"
+        res = requests.get(url, timeout=20)
+        if res.status_code == 200: return res.content
+    except: pass
+
+    # 3. Cuối cùng: Trả về ảnh Placeholder online (Không để đen)
+    try:
+        placeholder_url = f"https://placehold.co/{w}x{h}/0068C9/FFFFFF.png?text=Image+Generating+Failed"
+        res = requests.get(placeholder_url, timeout=10)
+        if res.status_code == 200: return res.content
+    except: pass
+
     return None
 
 def create_video(script, w, h, tone):
-    # Lọc lấy các dòng Scene
     lines = [l for l in script.split('\n') if "|" in l and ("Scene" in l or "Cảnh" in l)][:10]
     if not lines:
         st.error("⚠️ Lỗi kịch bản: Không tìm thấy dòng 'Scene X: ... | ...'")
         return None
         
-    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Tuần tự)...")
+    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ Hybrid)...")
     bar = st.progress(0)
     
     clips = []
     
-    # CHẠY TUẦN TỰ (Sequential Loop) - Đảm bảo không bị treo
+    # CHẠY TUẦN TỰ (Sequential Loop)
     for i, line in enumerate(lines):
         parts = line.split("|")
         if len(parts) < 2: continue
@@ -169,20 +176,25 @@ def create_video(script, w, h, tone):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f: af = f.name
         if not gen_audio(aud_t, af, tone): continue
         
-        # 2. Image
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
-            img_data = gen_image(img_p, w, h)
-            if img_data:
+        # 2. Image (Hybrid)
+        img_data = gen_image_hybrid(img_p, w, h)
+        if img_data:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
                 f.write(img_data); img_path = f.name
-            else:
-                img_path = "PLACEHOLDER"
+        else:
+            # Nếu tất cả đều lỗi, dùng màn hình xanh có chữ
+            img_path = "PLACEHOLDER"
         
         # 3. Tạo Clip con
         try:
             ac = AudioFileClip(af)
             dur = ac.duration + 0.5
+            
             if img_path == "PLACEHOLDER":
-                clip = ColorClip(size=(w, h), color=(0,0,0), duration=dur)
+                # Tạo clip màu có chữ
+                txt_clip = TextClip("Đang tải ảnh...", fontsize=50, color='white', size=(w,h)).set_duration(dur)
+                bg_clip = ColorClip(size=(w, h), color=(0,50,100), duration=dur)
+                clip = CompositeVideoClip([bg_clip, txt_clip])
             else:
                 clip = ImageClip(img_path).set_duration(dur)
             
@@ -190,7 +202,6 @@ def create_video(script, w, h, tone):
             clips.append(clip)
         except: pass
         
-        # Update tiến trình
         bar.progress((i+1)/len(lines))
         
     if clips:
@@ -206,7 +217,7 @@ def create_video(script, w, h, tone):
     return None
 
 # --- UI CHÍNH ---
-st.title("🛡️ Insurance Script")
+st.title("🛡️ Insurance Script Pro")
 
 col1, col2 = st.columns([1, 1.3], gap="large")
 
@@ -246,7 +257,6 @@ with col1:
 
     if st.button("🚀 XỬ LÝ NGAY"):
         if not api_key: st.error("❌ Thiếu Gemini Key")
-        elif not hf_token and fmt != "Bài Facebook": st.error("❌ Thiếu HuggingFace Token")
         else:
             with st.spinner("AI đang viết..."):
                 try:
@@ -278,11 +288,11 @@ with col2:
         sets = st.session_state.sets
         
         if ft == "Bài Website":
-            st.image(gen_image(f"{kw} insurance header", 1200, 628) or "https://via.placeholder.com/1200x628", use_container_width=True)
+            st.image(gen_image_hybrid(f"{kw} insurance header", 1200, 628) or "https://via.placeholder.com/1200x628", use_container_width=True)
             st.markdown(res)
             
         elif ft == "Bài Facebook":
-            st.image(gen_image(f"{kw} flat lay", 1080, 1080) or "https://via.placeholder.com/1080", width=450)
+            st.image(gen_image_hybrid(f"{kw} flat lay", 1080, 1080) or "https://via.placeholder.com/1080", width=450)
             st.markdown(res)
             
         else: # Video
