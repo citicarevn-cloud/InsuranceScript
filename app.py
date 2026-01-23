@@ -120,37 +120,52 @@ def gen_audio(text, fname, tone):
         return True
     except: return False
 
-def gen_image_hybrid(prompt, w, h):
+def gen_image_safe(prompt, w, h):
     """
-    Chiến thuật Hybrid: HuggingFace -> Pollinations -> Placeholder
-    Không bao giờ trả về None (Đen xì)
+    Chiến thuật: HF SDXL -> HF v1.5 -> Stock Backup
+    Nghỉ 4s giữa mỗi lần gọi để tránh Rate Limit.
     """
-    # 1. Thử Hugging Face (Ưu tiên)
+    # URL 1: Model SDXL (Đẹp nhưng hay quá tải)
+    API_URL_1 = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+    # URL 2: Model v1.5 (Nhẹ, ổn định hơn)
+    API_URL_2 = "https://api-inference.huggingface.co/models/runwayml/stable-diffusion-v1-5"
+    
+    headers = {"Authorization": f"Bearer {hf_token}"}
+    
+    # Prompt tinh chỉnh
+    full_prompt = prompt + ", masterpiece, high quality, cinematic lighting, corporate insurance style, no text"
+    full_prompt += ", vertical 9:16 portrait" if w < h else ", wide 16:9 landscape"
+
+    # THỬ MODEL 1 (SDXL)
     if hf_token:
-        API_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
-        headers = {"Authorization": f"Bearer {hf_token}"}
-        full_prompt = prompt + ", high quality illustration, isometric, no text"
-        full_prompt += ", vertical 9:16" if w < h else ", wide 16:9"
         try:
-            res = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=20)
-            if res.status_code == 200: return res.content
+            res = requests.post(API_URL_1, headers=headers, json={"inputs": full_prompt}, timeout=15)
+            if res.status_code == 200: 
+                time.sleep(4) # NGHỈ 4 GIÂY QUAN TRỌNG
+                return res.content
         except: pass
 
-    # 2. Thử Pollinations (Dự phòng - Single Thread nên an toàn hơn)
+    # THỬ MODEL 2 (V1.5) - Nếu model 1 lỗi
+    if hf_token:
+        try:
+            # Nghỉ chút trước khi thử lại
+            time.sleep(2)
+            res = requests.post(API_URL_2, headers=headers, json={"inputs": full_prompt}, timeout=15)
+            if res.status_code == 200: 
+                time.sleep(4) # NGHỈ 4 GIÂY QUAN TRỌNG
+                return res.content
+        except: pass
+
+    # PHƯƠNG ÁN CUỐI: ẢNH STOCK DỰ PHÒNG (KHÔNG BAO GIỜ ĐEN)
+    # Lấy ảnh ngẫu nhiên từ Picsum (mỗi lần 1 ảnh khác nhau)
     try:
-        clean_prompt = prompt.replace(" ", "%20")
-        url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width={w}&height={h}&nologo=true&seed={int(time.time())}&model=flux"
-        res = requests.get(url, timeout=20)
+        random_id = int(time.time()) % 1000
+        stock_url = f"https://picsum.photos/seed/{random_id}/{w}/{h}"
+        res = requests.get(stock_url, timeout=10)
         if res.status_code == 200: return res.content
     except: pass
 
-    # 3. Cuối cùng: Trả về ảnh Placeholder online (Không để đen)
-    try:
-        placeholder_url = f"https://placehold.co/{w}x{h}/0068C9/FFFFFF.png?text=Image+Generating+Failed"
-        res = requests.get(placeholder_url, timeout=10)
-        if res.status_code == 200: return res.content
-    except: pass
-
+    # NẾU MẤT MẠNG HOÀN TOÀN -> DÙNG MÀN HÌNH MÀU
     return None
 
 def create_video(script, w, h, tone):
@@ -159,7 +174,7 @@ def create_video(script, w, h, tone):
         st.error("⚠️ Lỗi kịch bản: Không tìm thấy dòng 'Scene X: ... | ...'")
         return None
         
-    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ Hybrid)...")
+    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ An toàn - Chậm để chắc)...")
     bar = st.progress(0)
     
     clips = []
@@ -176,13 +191,12 @@ def create_video(script, w, h, tone):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f: af = f.name
         if not gen_audio(aud_t, af, tone): continue
         
-        # 2. Image (Hybrid)
-        img_data = gen_image_hybrid(img_p, w, h)
+        # 2. Image (Safe Mode)
+        img_data = gen_image_safe(img_p, w, h)
         if img_data:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
                 f.write(img_data); img_path = f.name
         else:
-            # Nếu tất cả đều lỗi, dùng màn hình xanh có chữ
             img_path = "PLACEHOLDER"
         
         # 3. Tạo Clip con
@@ -191,8 +205,8 @@ def create_video(script, w, h, tone):
             dur = ac.duration + 0.5
             
             if img_path == "PLACEHOLDER":
-                # Tạo clip màu có chữ
-                txt_clip = TextClip("Đang tải ảnh...", fontsize=50, color='white', size=(w,h)).set_duration(dur)
+                # Màn hình xanh chữ trắng (Thay vì đen)
+                txt_clip = TextClip("Đang tải ảnh...", fontsize=30, color='white', size=(w,h)).set_duration(dur)
                 bg_clip = ColorClip(size=(w, h), color=(0,50,100), duration=dur)
                 clip = CompositeVideoClip([bg_clip, txt_clip])
             else:
@@ -288,11 +302,11 @@ with col2:
         sets = st.session_state.sets
         
         if ft == "Bài Website":
-            st.image(gen_image_hybrid(f"{kw} insurance header", 1200, 628) or "https://via.placeholder.com/1200x628", use_container_width=True)
+            st.image(gen_image_safe(f"{kw} insurance header", 1200, 628) or "https://via.placeholder.com/1200x628", use_container_width=True)
             st.markdown(res)
             
         elif ft == "Bài Facebook":
-            st.image(gen_image_hybrid(f"{kw} flat lay", 1080, 1080) or "https://via.placeholder.com/1080", width=450)
+            st.image(gen_image_safe(f"{kw} flat lay", 1080, 1080) or "https://via.placeholder.com/1080", width=450)
             st.markdown(res)
             
         else: # Video
