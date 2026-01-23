@@ -18,7 +18,7 @@ st.markdown("""
     <style>
     .stButton>button {background-color: #0068C9; color: white; font-weight: bold; border-radius: 8px; height: 3em; width: 100%;}
     img {border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); margin: 10px 0;}
-    .stMarkdown {font-family: 'Helvetica', sans-serif;}
+    .caption {font-style: italic; color: #555; text-align: center; font-size: 0.9em;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -132,19 +132,23 @@ def gen_image_safe(prompt, w, h):
         try:
             res = requests.post(API_URL, headers=headers, json={"inputs": full_prompt}, timeout=15)
             if res.status_code == 200: 
-                time.sleep(3) # Nghỉ 3s
+                time.sleep(2) # Delay nhẹ
                 return res.content
         except: pass
 
-    # 2. Pollinations
+    # 2. Pollinations (Thêm delay và User-Agent để tránh Rate Limit)
     try:
         clean_prompt = prompt.replace(" ", "%20")
         url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width={w}&height={h}&nologo=true&seed={int(time.time())}&model=flux"
-        res = requests.get(url, timeout=20)
-        if res.status_code == 200: return res.content
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Thử tối đa 2 lần
+        for _ in range(2):
+            res = requests.get(url, headers=headers, timeout=20)
+            if res.status_code == 200: return res.content
+            time.sleep(2)
     except: pass
 
-    # 3. Stock Backup
+    # 3. Stock Backup (Picsum - Không bao giờ lỗi)
     try:
         stock_url = f"https://picsum.photos/seed/{int(time.time())}/{w}/{h}"
         res = requests.get(stock_url, timeout=10)
@@ -153,30 +157,42 @@ def gen_image_safe(prompt, w, h):
 
     return None
 
-# --- HÀM XỬ LÝ BÀI VIẾT WEBSITE (FIXED) ---
+# --- HÀM XỬ LÝ BÀI VIẾT WEBSITE (CAPTION TIẾNG VIỆT) ---
 def render_mixed_content(text):
     """
-    Tách văn bản và lệnh {IMAGE: ...} để hiển thị ảnh thực tế
+    Xử lý thẻ {IMAGE: English Prompt | Caption Tiếng Việt}
     """
     # Regex tìm thẻ {IMAGE: ...}
     parts = re.split(r'\{IMAGE:\s*(.*?)\}', text, flags=re.IGNORECASE)
     
     for i, part in enumerate(parts):
         if i % 2 == 0:
-            # Phần chẵn là văn bản thường
             if part.strip():
                 st.markdown(part)
         else:
-            # Phần lẻ là Prompt ảnh
-            prompt = part.strip()
-            if prompt:
-                with st.spinner(f"🎨 Đang vẽ minh họa: {prompt[:30]}..."):
-                    # Dùng hàm tạo ảnh Safe (giống Video)
-                    img_data = gen_image_safe(prompt, 800, 450)
+            # Xử lý phần trong ngoặc
+            raw_content = part.strip()
+            
+            # Tách Prompt (Anh) và Caption (Việt)
+            if "|" in raw_content:
+                prompt_en, caption_vn = raw_content.split("|", 1)
+            else:
+                prompt_en = raw_content
+                caption_vn = "Hình ảnh minh họa" # Fallback nếu AI quên tạo caption
+
+            prompt_en = prompt_en.strip()
+            caption_vn = caption_vn.strip()
+
+            if prompt_en:
+                with st.spinner(f"🎨 Đang vẽ: {caption_vn}..."):
+                    # Gọi hàm Safe (Có delay + fallback)
+                    img_data = gen_image_safe(prompt_en, 800, 450)
                     if img_data:
-                        st.image(img_data, caption=f"Minh họa: {prompt}", use_container_width=True)
+                        st.image(img_data, use_container_width=True)
+                        st.markdown(f"<div class='caption'>{caption_vn}</div>", unsafe_allow_html=True)
+                        time.sleep(2) # Nghỉ 2s sau mỗi ảnh để tránh Rate Limit
                     else:
-                        st.warning(f"⚠️ Không tải được ảnh: {prompt}")
+                        st.warning(f"⚠️ Không tải được ảnh: {caption_vn}")
 
 def create_video(script, w, h, tone):
     lines = [l for l in script.split('\n') if "|" in l and ("Scene" in l or "Cảnh" in l)][:10]
@@ -184,7 +200,7 @@ def create_video(script, w, h, tone):
         st.error("⚠️ Lỗi kịch bản: Không tìm thấy dòng 'Scene X: ... | ...'")
         return None
         
-    st.info(f"🎬 Đang xử lý {len(lines)} cảnh (Chế độ An toàn)...")
+    st.info(f"🎬 Đang xử lý {len(lines)} cảnh...")
     bar = st.progress(0)
     
     clips = []
@@ -200,7 +216,7 @@ def create_video(script, w, h, tone):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f: af = f.name
         if not gen_audio(aud_t, af, tone): continue
         
-        # 2. Image (Safe Mode)
+        # 2. Image
         img_data = gen_image_safe(img_p, w, h)
         if img_data:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as f:
@@ -268,8 +284,14 @@ with col1:
         
     elif fmt == "Bài Website":
         words = st.slider("Số từ", 500, 2000, 1000)
-        # Sửa prompt để AI trả về đúng định dạng cho hàm render
-        seo_guide = f"Viết bài chuẩn SEO {words} từ. BẮT BUỘC chèn thẻ {{IMAGE: prompt tiếng Anh}} xen kẽ vào bài viết để minh họa."
+        # SỬA PROMPT ĐỂ TẠO CAPTION TIẾNG VIỆT
+        seo_guide = f"""
+        Viết bài chuẩn SEO {words} từ. 
+        QUY TẮC CHÈN ẢNH (BẮT BUỘC):
+        Mỗi đoạn văn hãy chèn một thẻ ảnh theo định dạng sau:
+        {{IMAGE: [Mô tả ảnh chi tiết bằng tiếng Anh để vẽ] | [Caption ngắn gọn tiếng Việt dưới 7 từ]}}
+        Ví dụ: {{IMAGE: A happy family holding hands in a park | Gia đình hạnh phúc bên nhau}}
+        """
         
     else:
         seo_guide = "Viết Caption Facebook thu hút. Đề xuất ảnh vuông."
@@ -298,7 +320,7 @@ with col1:
                     st.session_state.res = response.text
                     st.session_state.fmt = fmt
                     st.session_state.sets = {'w': vw, 'h': vh, 'tone': auto_tone}
-                    st.session_state.kw = kw # Lưu từ khóa để tạo ảnh featured
+                    st.session_state.kw = kw 
                     st.success("Đã xong!")
                 except Exception as e:
                     st.error(f"❌ Lỗi AI: {e}")
@@ -312,14 +334,15 @@ with col2:
         kw_saved = st.session_state.get('kw', 'insurance')
         
         if ft == "Bài Website":
-            # 1. Ảnh Featured (Đầu bài)
+            # Ảnh Featured
             st.info("🖼️ Ảnh Featured")
             feat_img = gen_image_safe(f"{kw_saved} insurance header illustration", 1200, 628)
-            if feat_img: st.image(feat_img, use_container_width=True)
+            if feat_img: 
+                st.image(feat_img, use_container_width=True)
+                st.markdown("<div class='caption'>Ảnh đại diện bài viết</div>", unsafe_allow_html=True)
             
-            # 2. Nội dung bài viết (Có chèn ảnh minh họa)
             st.write("---")
-            render_mixed_content(res) # <--- HÀM MỚI Ở ĐÂY
+            render_mixed_content(res)
             
         elif ft == "Bài Facebook":
             st.info("📱 Ảnh Vuông")
